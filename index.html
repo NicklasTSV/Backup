@@ -1,1 +1,1039 @@
-hallo
+
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mannschaftsapp – Strafenkasse</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#c42805" />
+
+  <style>
+    body {
+      font-family: sans-serif;
+      background: #f5f5f5;
+      margin: 0;
+    }
+    header {
+      background: #000000;
+      color: white;
+      padding: 15px;
+      text-align: center;
+    }
+    nav {
+      display: flex;
+      justify-content: center;
+      background: #c42805;
+      flex-wrap: wrap;
+    }
+    nav button {
+      background: none;
+      border: none;
+      color: white;
+      padding: 15px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    nav button:hover {
+      background: #a30000;
+    }
+    section {
+      max-width: 800px;
+      margin: auto;
+      padding: 20px;
+      display: none;
+    }
+    input, select, button {
+      padding: 10px;
+      margin: 5px 0;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 8px;
+      text-align: center;
+    }
+    .clickable {
+      cursor: pointer;
+      color: blue;
+      text-decoration: underline;
+    }
+  </style>
+ 
+  
+</head>
+<body>
+<header>
+  <h1>⚽ Mannschafts-App <br> TSV Dramfeld</h1>
+</header>
+
+<nav>
+  <button onclick="switchPage('home')">Strafen</button>
+  <button onclick="switchPage('catalog')">Strafenkatalog</button>
+  <button onclick="switchPage('schedule')">Termine</button>
+  <button onclick="switchPage('docs')">Dokumente</button>
+  <button id="navTraining" onclick="switchPage('trainingSection')" style="display: none;">📅 Training</button>
+</nav>
+
+<section id="login">
+  <h2>🔐 Zugang</h2>
+  <input type="password" id="pinInput" placeholder="PIN eingeben" />
+  <button onclick="checkPIN()">Weiter</button>
+</section>
+
+<section id="home">
+  <h2>Strafenübersicht</h2>
+  <div id="penaltyEntry">
+    <select id="playerSelect"></select>
+    <select id="penaltySelect"></select>
+    <button onclick="addPenalty()">Strafe eintragen</button>
+  </div>
+  <table>
+    <thead><tr><th>Spieler</th><th>Summe (€)</th></tr></thead>
+    <tbody id="summaryTable"></tbody>
+  </table>
+</section>
+
+<section id="catalog">
+  <h2>Strafenkatalog</h2>
+
+  <p>
+    📄 <a href="https://nicklastsv.github.io/tsv/Strafen TSV.pdf" target="_blank">
+      Strafenkatalog TSV (PDF)
+    </a>
+  </p>
+
+  <ul id="penaltyList"></ul>
+</section>
+
+<section id="schedule">
+  <h2>Termine</h2>
+  <ul id="eventList"></ul>
+</section>
+
+<section id="docs">
+  <h2>Dokumente</h2>
+  <ul id="docList"></ul>
+</section>
+
+<section id="adminPanel">
+  <h2>🔧 Admin Panel</h2>
+  <div>
+    <h3>Strafen</h3>
+    <input id="newPenaltyName" placeholder="Strafe" />
+    <input id="newPenaltyAmount" type="number" placeholder="Betrag" />
+    <button onclick="addNewPenalty()">Hinzufügen</button>
+    <ul id="adminPenaltyList"></ul>
+
+    <h3>Spieler</h3>
+    <input id="newPlayer" placeholder="Spielername" />
+    <button onclick="addNewPlayer()">Hinzufügen</button>
+    <ul id="adminPlayerList"></ul>
+
+    <h3>Dokumente</h3>
+    <input id="newDocName" placeholder="Name" />
+    <input id="newDocURL" placeholder="https://..." />
+    <button onclick="addNewDoc()">Hinzufügen</button>
+    <ul id="adminDocList"></ul>
+
+    <h3>Termine</h3>
+    <input id="newEventText" placeholder="Terminbeschreibung" />
+    <input id="newEventDate" type="date" />
+    <button onclick="addNewEvent()">Hinzufügen</button>
+    <ul id="adminEventList"></ul>
+  </div>
+</section>
+  
+</section>
+
+<!-- 🔒 Nur für Admin sichtbar -->
+<section id="trainingSection" style="display:none">
+  <h2>📅 Trainingsverwaltung</h2>
+
+  <h3>Trainingstage</h3>
+  <input id="trainingDate" type="date" />
+  <button onclick="addTrainingDate()">Trainingstag hinzufügen</button>
+  <div id="trainingList"></div>
+
+  <h3>📋 Anwesenheitsübersicht</h3>
+  <div id="trainingStats"></div>
+
+  <button onclick="switchPage('home')">🔙 Zurück</button>
+</section>
+
+<script>
+
+  // Session-Login-Zustände
+  const ROLE_VIEWER = "viewer";
+  const ROLE_EDITOR = "editor";
+  const ROLE_COACH = "coach";
+  const ROLE_ADMIN = "admin";
+
+  let sessionRole = sessionStorage.getItem("role");
+
+  function isLoggedIn() {
+    return sessionRole !== null;
+  }
+
+  function loginWithPIN(pin) {
+    if (pin === BASIC_PIN) {
+      sessionStorage.setItem("role", ROLE_VIEWER);
+      userRole = ROLE_VIEWER;
+      switchPage("home");
+    } else if (pin === POWER_PIN) {
+      sessionStorage.setItem("role", ROLE_EDITOR);
+      userRole = ROLE_EDITOR;
+      switchPage("home");
+    } else if (pin === ADMIN_PIN) {
+      sessionStorage.setItem("role", ROLE_ADMIN);
+      userRole = ROLE_ADMIN;
+      switchPage("adminPanel");
+    } else if (pin === COACH_PIN) {
+    sessionStorage.setItem("role", "ROLE_COACH");
+    userRole = "ROLE_COACH";
+    switchPage("home");
+    } else {
+      alert("Falsche PIN!");
+      return;
+    }
+    setupApp();
+  }
+
+  function requireLogin(page) {
+    if (!isLoggedIn()) {
+      alert("Bitte zuerst PIN eingeben.");
+      switchPage("login");
+      return false;
+    }
+    return true;
+  }
+
+  window.onload = () => {
+    const savedRole = sessionStorage.getItem("role");
+      if (savedRole) {
+      userRole = savedRole;
+        if (userRole === ROLE_ADMIN) {
+        switchPage("adminPanel");
+        } else {
+        switchPage("home");
+        }
+      setupApp();
+    } else {
+      switchPage("login");
+    }
+  };
+
+  const BASIC_PIN = "123";
+  const POWER_PIN = "456";
+  const COACH_PIN = "789";
+  const ADMIN_PIN = "123!=";
+  let userRole = null;
+
+let penalties = []; // z. B. [{id: "...", name: "...", amount: 5}]
+
+let playerPenalties = {};
+
+function loadPenaltyCatalog() {
+  const refCatalog = ref(db, "penalties"); // Korrigierter Pfad!
+
+  onValue(refCatalog, (snapshot) => {
+    const data = snapshot.val();
+    penalties = data
+      ? Object.entries(data).map(([id, p]) => ({
+          id,
+          name: p.name,
+          amount: p.amount
+        }))
+      : [];
+
+    updateSelects();
+    updatePenaltyList();
+    updateAdminPanel();
+  });
+}
+
+function loadPlayerPenalties() {
+  const refPenalties = ref(db, "playerPenalties");
+  get(refPenalties).then((snapshot) => {
+    playerPenalties = snapshot.val() || {};
+    
+  }).catch((error) => {
+    console.error("Fehler beim Laden der Strafen:", error);
+  });
+}
+
+let players = []; // z. B. [{id: "...", name: "Max"}, ...]
+
+function loadPlayersFromFirebase() {
+  const playersRef = ref(db, "players");
+  return get(playersRef).then((snapshot) => {
+    const data = snapshot.val();
+    players = [];
+
+    if (data) {
+      // Wenn deine Struktur so ist: { id123: "Spielername" }
+      Object.entries(data).forEach(([id, name]) => {
+        players.push({ id, name });
+      });
+    } else {
+      console.warn("⚠️ Keine Spielerdaten gefunden.");
+    }
+  }).catch((error) => {
+    console.error("❌ Fehler beim Laden der Spieler:", error);
+  });
+}
+
+function loadDocsFromFirebase() {
+  const ul = document.getElementById("docList");
+  const adminUl = document.getElementById("adminDocList");
+
+  onValue(ref(db, "documents"), (snapshot) => {
+    const data = snapshot.val() || {};
+    ul.innerHTML = "";
+    adminUl.innerHTML = "";
+
+    Object.entries(data).forEach(([key, doc]) => {
+      const item = `<a href="${doc.url}" target="_blank">${doc.name}</a>`;
+      const deleteBtn = (userRole === "admin")
+        ? ` <button onclick="deleteDoc('${key}')">🗑️</button>`
+        : "";
+
+      ul.innerHTML += `<li>${item}${deleteBtn}</li>`;
+      adminUl.innerHTML += `<li>${item}${deleteBtn}</li>`;
+    });
+  });
+}
+
+function loadEventsFromFirebase() {
+  const ul = document.getElementById("eventList");
+  const adminUl = document.getElementById("adminEventList");
+
+  onValue(ref(db, "events"), (snapshot) => {
+    const data = snapshot.val() || {};
+    ul.innerHTML = "";
+    adminUl.innerHTML = "";
+
+    Object.entries(data).forEach(([key, e]) => {
+      const item = `📅 ${e.date} – ${e.text}`;
+      const deleteBtn = (userRole === "admin")
+        ? ` <button onclick="deleteEvent('${key}')">🗑️</button>`
+        : "";
+
+      ul.innerHTML += `<li>${item}${deleteBtn}</li>`;
+      adminUl.innerHTML += `<li>${item}${deleteBtn}</li>`;
+    });
+  });
+}
+
+  let summary = JSON.parse(localStorage.getItem("summary")) || {};
+  
+  // nicht mehr benötigt: let docs = JSON.parse(localStorage.getItem("docs")) || [];
+  // nicht mehr benötigt: let events = JSON.parse(localStorage.getItem("events")) || [];
+
+function switchPage(id) {
+  const role = sessionStorage.getItem("role");
+
+  // Zugriffsschutz: Nur zur Login-Seite, wenn nicht eingeloggt
+  if (!role && id !== "login") {
+    alert("Bitte zuerst PIN eingeben.");
+    return switchPage("login");
+  }
+
+  // Alle Seiten ausblenden
+  document.querySelectorAll("section").forEach(s => s.style.display = "none");
+
+  // Gewünschte Seite anzeigen
+  const target = document.getElementById(id);
+  if (target) {
+    target.style.display = "block";
+
+    // 🔁 Trainingsdaten nur bei trainingSection laden
+    if (id === "trainingSection") {
+      loadTrainings();
+      calculateAttendanceStats();
+    }
+  }
+}
+  
+function checkPIN() {
+  const pin = document.getElementById("pinInput").value;
+
+  if (pin === BASIC_PIN) {
+    sessionStorage.setItem("role", "viewer");
+    userRole = "viewer";
+    switchPage("home");
+  } else if (pin === POWER_PIN) {
+    sessionStorage.setItem("role", "editor");
+    userRole = "editor";
+    switchPage("home");
+  } else if (pin === COACH_PIN) {
+    sessionStorage.setItem("role", "coach");
+    userRole = "coach";
+  } else if (pin === ADMIN_PIN) {
+    sessionStorage.setItem("role", "admin");
+    userRole = "admin";
+
+    // ✅ Nur Admin sieht den Trainings-Link
+    document.getElementById("navTraining").style.display = "inline-block";
+
+    switchPage("adminPanel");
+  } else {
+    alert("Falsche PIN!");
+    return;
+  }
+
+  setupApp(); // App-Daten laden, Rollen-Funktionen aktivieren
+}
+
+function logout() {
+  sessionStorage.clear(); // Login-Status löschen
+  switchPage("login");    // zurück zur Login-Seite
+}
+
+function setupApp() {
+  loadPlayersFromFirebase();
+  updateSelects();
+  updateSummary();
+  updatePlayerSelect();       // neu
+  updatePenaltySelect();      // neu
+  loadPenaltyCatalog();
+  loadPlayerPenalties();
+  loadEventsFromFirebase();
+  loadDocsFromFirebase();
+
+  updateAdminPanel();
+
+  // Rollenbasierte Anzeige
+  document.getElementById("penaltyEntry").style.display =
+    (userRole === "editor" || userRole === "admin") ? "block" : "none";
+
+  // Admin-Panel nur für Admins sichtbar machen
+  document.getElementById("adminPanel").style.display = (userRole === "admin") ? "block" : "none";
+
+  // Nur Admin und coach darf Training sehen und vorbereiten
+  if (userRole === "admin" || userRole === "coach") {
+    document.getElementById("navTraining").style.display = "inline-block";
+    loadTrainings();
+    calculateAttendanceStats();
+  }
+}
+  
+function calculateAttendanceStats() {
+  const trainingRef = ref(db, "trainings");
+
+  get(trainingRef).then((snapshot) => {
+    const data = snapshot.val() || {};
+    const stats = {};
+
+    Object.values(data).forEach(training => {
+      Object.entries(training.players || {}).forEach(([playerId, status]) => {
+        if (!stats[playerId]) {
+          stats[playerId] = { total: 0, present: 0 };
+        }
+        stats[playerId].total++;
+        if (status === "anwesend") {
+          stats[playerId].present++;
+        }
+      });
+    });
+
+    const playerStats = players.map(p => {
+      const s = stats[p.id] || { total: 0, present: 0 };
+      const percent = s.total > 0 ? ((s.present / s.total) * 100).toFixed(1) : null;
+      return {
+        id: p.id,
+        name: p.name,
+        percent: percent !== null ? parseFloat(percent) : null
+      };
+    });
+
+    const validStats = playerStats.filter(p => p.percent !== null);
+    const sorted = [...validStats].sort((a, b) => b.percent - a.percent);
+    const top3 = sorted.slice(0, 3).map(p => p.id);
+    const bottom3 = sorted.slice(-3).map(p => p.id);
+
+    // 👉 HTML komplett vorbereiten
+    let html = `
+      <h3>📊 Anwesenheitsstatistik</h3>
+      <div style="overflow-x: auto;">
+        <table style="width: 100%; border-collapse: collapse;">
+          <thead>
+            <tr>
+              <th style="text-align: left; padding: 8px;">Spieler</th>
+              <th style="text-align: left; padding: 8px;">Anwesenheit</th>
+            </tr>
+          </thead>
+          <tbody>
+    `;
+
+    playerStats.forEach(p => {
+      let colorStyle = "";
+      if (top3.includes(p.id)) {
+        colorStyle = 'color: green; font-weight: bold;';
+      } else if (bottom3.includes(p.id)) {
+        colorStyle = 'color: red; font-weight: bold;';
+      }
+
+      const percentText = p.percent !== null ? `${p.percent} %` : "–";
+
+      html += `
+        <tr>
+          <td style="padding: 6px;">${p.name}</td>
+          <td style="padding: 6px; ${colorStyle}">${percentText}</td>
+        </tr>
+      `;
+    });
+
+    html += `
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    // 🟢 Jetzt einmalig setzen
+    const container = document.getElementById("trainingStats");
+    container.innerHTML = html;
+  }).catch((error) => {
+    console.error("Fehler bei Anwesenheitsstatistik:", error);
+  });
+}
+
+function updateSelects() {
+  const ps = document.getElementById("playerSelect");
+  const pe = document.getElementById("penaltySelect");
+
+  if (!ps || !pe || !players || !penalties) return;
+
+  ps.innerHTML = "";
+  players.forEach(player => {
+    ps.innerHTML += `<option value="${player.id}">${player.name}</option>`;
+  });
+
+  pe.innerHTML = "";
+  penalties.forEach((penalty, i) => {
+    pe.innerHTML += `<option value="${i}">${penalty.name} (${penalty.amount} €)</option>`;
+  });
+}
+
+function addPenalty() {
+  if (userRole !== "editor" && userRole !== "admin") {
+    alert("Du hast keine Berechtigung, Strafen hinzuzufügen.");
+    return;
+  }
+
+  const player = document.getElementById("playerSelect").value;
+  const penaltyIndex = parseInt(document.getElementById("penaltySelect").value);
+  const penalty = penalties[penaltyIndex];
+
+  if (!player || !penalty) return;
+
+  const penaltyRef = push(ref(db, `playerPenalties/${player}`));
+  set(penaltyRef, {
+    name: penalty.name,
+    amount: penalty.amount,
+    timestamp: new Date().toISOString(),
+    paid: false // 🟢 NEU
+  }).then(() => {
+    updateSummary();
+  }).catch((error) => {
+    console.error("Fehler beim Hinzufügen der Strafe:", error);
+  });
+}
+
+function updatePlayerSelect() {
+  const ps = document.getElementById("playerSelect");
+  if (!ps || !players) return;
+
+  ps.innerHTML = "";
+  players.forEach(p => {
+    ps.innerHTML += `<option value="${p.id}">${p.name}</option>`;
+  });
+}
+
+function updatePenaltySelect() {
+  const pe = document.getElementById("penaltySelect");
+  if (!pe || !penalties) return;
+
+  pe.innerHTML = "";
+  Object.entries(penalties).forEach(([key, pen]) => {
+    pe.innerHTML += `<option value="${key}">${pen.name} (${pen.amount} €)</option>`;
+  });
+}
+
+function updateSummary() {
+  const tb = document.getElementById("summaryTable");
+  tb.innerHTML = "";
+
+  get(ref(db, "playerPenalties")).then((snapshot) => {
+    const data = snapshot.val() || {};
+
+    players.forEach(player => {
+      const playerData = data[player.id];
+      let sum = 0;
+
+      if (playerData) {
+        Object.values(playerData).forEach(p => {
+          if (!p.paid && typeof p.amount === "number") {  // 🟢 Nur unbezahlte
+            sum += p.amount;
+          }
+        });
+      }
+
+      tb.innerHTML += `
+        <tr>
+          <td class="clickable" onclick="showPlayerDetails('${player.id}')">${player.name}</td>
+          <td>${sum.toFixed(2)} €</td>
+        </tr>`;
+    });
+  });
+}
+
+function updatePenaltyList() {
+  const ul = document.getElementById("penaltyList");
+  ul.innerHTML = "";
+  penalties.forEach(p => {
+    ul.innerHTML += `<li>${p.name} – ${p.amount.toFixed(2)} €</li>`;
+  });
+}
+
+function updateAdminPanel() {
+  const adminPlayerList = document.getElementById("adminPlayerList");
+  const adminPenaltyList = document.getElementById("adminPenaltyList");
+
+  // 🟩 Spieler aktualisieren
+  adminPlayerList.innerHTML = "";
+  players.forEach(player => {
+    adminPlayerList.innerHTML += `
+      <li>
+        ${player.name}
+        <button onclick="deletePlayer('${player.id}')">🗑️</button>
+      </li>`;
+  });
+
+  // 🟩 Strafen aktualisieren
+  adminPenaltyList.innerHTML = penalties.map((p) =>
+    `<li>${p.name} – ${p.amount.toFixed(2)} € <button onclick="deletePenalty('${p.id}')">🗑️</button></li>`
+  ).join("");
+
+  // ❌ Dokumente und Events werden NICHT mehr hier aufgebaut!
+  // Stattdessen erfolgt ihre Darstellung durch loadDocsFromFirebase() & loadEventsFromFirebase()
+}
+
+function addNewPenalty() {
+  const name = document.getElementById("newPenaltyName").value;
+  const amount = parseFloat(document.getElementById("newPenaltyAmount").value);
+  if (!name || isNaN(amount)) return;
+
+  const newRef = push(ref(db, "penalties"));
+  set(newRef, { name, amount })
+    .then(() => {
+      document.getElementById("newPenaltyName").value = "";
+      document.getElementById("newPenaltyAmount").value = "";
+    })
+    .catch((error) => {
+      console.error("Fehler beim Speichern der Strafe:", error);
+    });
+}
+function deletePenalty(id) {
+  const penRef = ref(db, "penalties/" + id);
+  remove(penRef).catch((error) => {
+    console.error("Fehler beim Löschen:", error);
+  });
+}
+
+function addNewPlayer() {
+  const name = document.getElementById("newPlayer").value;
+  if (!name) return;
+
+  const playerRef = push(ref(db, "players"));  // Neue ID in "players/"
+  set(playerRef, name).then(() => {
+    document.getElementById("newPlayer").value = "";
+    alert("Spieler hinzugefügt!");
+  }).catch((error) => {
+    console.error("Fehler beim Hinzufügen des Spielers:", error);
+  });
+}
+
+function deletePlayer(id) {
+  const playerRef = ref(db, "players/" + id);
+  remove(playerRef).then(() => {
+    alert("Spieler gelöscht!");
+  }).catch((error) => {
+    console.error("Fehler beim Löschen des Spielers:", error);
+  });
+}
+
+// 📄 Dokument hinzufügen
+function addNewDoc() {
+  const name = document.getElementById("newDocName").value;
+  const url = document.getElementById("newDocURL").value;
+  if (!name || !url) return;
+
+  const newRef = push(ref(db, "documents"));
+  set(newRef, {
+    name,
+    url,
+    timestamp: Date.now()
+  }).then(() => {
+    document.getElementById("newDocName").value = "";
+    document.getElementById("newDocURL").value = "";
+    loadDocsFromFirebase(); // ✅ Liste aktualisieren
+  }).catch((error) => {
+    console.error("Fehler beim Speichern des Dokuments:", error);
+  });
+}
+
+// 📄 Dokument löschen
+function deleteDoc(key) {
+  remove(ref(db, `documents/${key}`))
+    .then(() => loadDocsFromFirebase())
+    .catch((error) => {
+      console.error("Fehler beim Löschen des Dokuments:", error);
+    });
+}
+
+// 📅 Termin hinzufügen
+function addNewEvent() {
+  const text = document.getElementById("newEventText").value;
+  const date = document.getElementById("newEventDate").value;
+  if (!text || !date) return;
+
+  const newRef = push(ref(db, "events"));
+  set(newRef, {
+    text,
+    date,
+    timestamp: Date.now()
+  }).then(() => {
+    document.getElementById("newEventText").value = "";
+    document.getElementById("newEventDate").value = "";
+    loadEventsFromFirebase(); // ✅ Liste aktualisieren
+  }).catch((error) => {
+    console.error("Fehler beim Hinzufügen des Termins:", error);
+  });
+}
+
+// 📅 Termin löschen
+function deleteEvent(key) {
+  remove(ref(db, `events/${key}`))
+    .then(() => loadEventsFromFirebase())
+    .catch((error) => {
+      console.error("Fehler beim Löschen des Termins:", error);
+    });
+}
+
+function addTrainingDate() {
+  const date = document.getElementById("trainingDate").value;
+  if (!date) return;
+
+  const trainingRef = ref(db, `trainings/${date}`);
+
+  const initialPlayers = {};
+  players.forEach(p => {
+    initialPlayers[p.id] = "absent";
+  });
+
+  const initialData = {
+    players: initialPlayers
+  };
+
+  set(trainingRef, initialData)
+    .then(() => {
+      alert("Trainingstermin angelegt.");
+      document.getElementById("trainingDate").value = "";
+      loadTrainings();
+    })
+    .catch((err) => {
+      console.error("Fehler beim Anlegen des Trainings:", err);
+    });
+}
+
+function loadTrainings() {
+  const container = document.getElementById("trainingList");
+  if (!container) return;
+
+  const trainingsRef = ref(db, "trainings");
+  onValue(trainingsRef, (snapshot) => {
+    const data = snapshot.val();
+    container.innerHTML = "";
+
+    if (!data) {
+      container.innerHTML = "<p>Keine Trainingsdaten vorhanden.</p>";
+      return;
+    }
+
+    Object.entries(data).forEach(([date, training]) => {
+      const playersData = training.players || {}; // ✅ korrekt auf trainings/<datum>/players zugreifen
+
+      let html = `<h4>${date} <button onclick="deleteTraining('${date}')">🗑️</button></h4>`;
+      html += `<table><tr><th>Spieler</th><th>Status</th></tr>`;
+
+      players.forEach(player => {
+        const status = playersData[player.id] || "";
+
+        html += `
+          <tr>
+            <td>${player.name}</td>
+            <td>
+              <select onchange="updatePlayerTrainingStatus('${date}', '${player.id}', this.value)">
+                <option value="" ${status === "" ? "selected" : ""}>–</option>
+                <option value="anwesend" ${status === "anwesend" ? "selected" : ""}>Anwesend</option>
+                <option value="entschuldigt" ${status === "entschuldigt" ? "selected" : ""}>Entschuldigt</option>
+                <option value="unentschuldigt" ${status === "unentschuldigt" ? "selected" : ""}>Unentschuldigt</option>
+              </select>
+            </td>
+          </tr>
+        `;
+      });
+
+      html += `</table><hr>`;
+      container.innerHTML += html;
+    });
+  });
+}
+
+function loadTrainingData() {
+  const container = document.getElementById("trainingStats");
+  container.innerHTML = "";
+
+  const trainingRef = ref(db, "trainings");
+  get(trainingRef).then((snapshot) => {
+    const data = snapshot.val();
+    if (!data) {
+      container.innerHTML = "<p>Keine Trainings gefunden.</p>";
+      return;
+    }
+
+    Object.entries(data).forEach(([trainingId, training]) => {
+      const trainingDate = training.date || trainingId;
+      const playerStates = training.players || {};
+
+      let html = `<h4>📅 ${trainingDate}</h4><table><tr><th>Spieler</th><th>Status</th></tr>`;
+
+      players.forEach(player => {
+        const status = playerStates[player.id] || "";
+        html += `
+          <tr>
+            <td>${player.name}</td>
+            <td>
+              <select onchange="updatePlayerTrainingStatus('${trainingId}', '${player.id}', this.value)">
+                <option value="">–</option>
+                <option value="anwesend" ${status === "anwesend" ? "selected" : ""}>Anwesend</option>
+                <option value="entschuldigt" ${status === "entschuldigt" ? "selected" : ""}>Entschuldigt</option>
+                <option value="unentschuldigt" ${status === "unentschuldigt" ? "selected" : ""}>Unentschuldigt</option>
+              </select>
+            </td>
+          </tr>`;
+      });
+
+      html += "</table><hr>";
+      container.innerHTML += html;
+    });
+  }).catch((error) => {
+    console.error("Fehler beim Laden der Trainingsdaten:", error);
+    container.innerHTML = "<p>Fehler beim Laden der Trainingsdaten.</p>";
+  });
+}
+
+function deleteTraining(date) {
+  if (!confirm("Möchtest du diesen Trainingstag wirklich löschen?")) return;
+
+  const trainingRef = ref(db, `trainings/${date}`);
+  remove(trainingRef)
+    .then(() => {
+      alert("Trainingstag gelöscht.");
+    })
+    .catch((error) => {
+      console.error("Fehler beim Löschen des Trainings:", error);
+    });
+}
+
+function updatePlayerTrainingStatus(trainingId, playerId, status) {
+  const playerRef = ref(db, `trainings/${trainingId}/players/${playerId}`);
+  set(playerRef, status)
+    .then(() => {
+      console.log(`Status aktualisiert: Spieler ${playerId}, Training ${trainingId}`);
+      calculateAttendanceStats(); // 🟢 HIER ergänzen
+    })
+    .catch((error) => {
+      console.error("Fehler beim Speichern des Status:", error);
+    });
+}
+
+let currentDetailRef = null;
+
+function showPlayerDetails(playerId) {
+  const player = players.find(p => p.id === playerId);
+  if (!player) return;
+
+  document.getElementById("detailPlayerName").textContent = player.name;
+  document.querySelectorAll("section").forEach(s => s.style.display = "none");
+  document.getElementById("playerDetails").style.display = "block";
+
+  const ul = document.getElementById("playerPenaltyDetails");
+  ul.innerHTML = "";
+
+  const playerRef = ref(db, `playerPenalties/${playerId}`);
+
+  // ⬛ AKTIVE STRAFEN LADEN
+  get(playerRef).then((snapshot) => {
+    const data = snapshot.val();
+    if (!data) {
+      ul.innerHTML = "<li>Keine Strafen gefunden</li>";
+      return;
+    }
+
+    Object.entries(data).forEach(([key, p]) => {
+      const date = p.timestamp ? new Date(p.timestamp).toLocaleString() : "";
+      const deleteBtn = (userRole === "admin" || userRole === "editor")
+        ? ` <button onclick="deletePlayerPenalty('${playerId}', '${key}')">🗑️</button>`
+        : "";
+
+      ul.innerHTML += `<li>${p.name} – ${p.amount.toFixed(2)} € – ${date}${deleteBtn}</li>`;
+    });
+  if ((userRole === "admin" || userRole === "editor") && Object.keys(data).length > 0) {
+  ul.innerHTML += `
+   <div style="margin-top: 10px;">
+  <button onclick="prepareMarkPenaltiesAsPaid('${playerId}')" style="background-color: green; color: white; padding: 8px 12px; border: none; border-radius: 6px; font-size: 16px;">
+    💰 Strafen bezahlt
+  </button>
+</div>
+  `;
+}
+  }).catch((error) => {
+    console.error("Fehler beim Laden der Strafen:", error);
+    ul.innerHTML = "<li>Fehler beim Laden der Strafen</li>";
+  });
+
+// ⬛ ARCHIVIERTE STRAFEN LADEN
+const historyDiv = document.getElementById("penaltyHistory");
+historyDiv.innerHTML = "<h4>📜 Historie</h4>";
+
+const archiveRef = ref(db, `paidPenalties/${playerId}`);
+get(archiveRef).then((snapshot) => {
+  const data = snapshot.val();
+  if (!data) {
+    historyDiv.innerHTML += "<p>Keine Zahlungen gefunden.</p>";
+    return;
+  }
+
+  Object.entries(data).forEach(([key, entry]) => {
+    const date = entry.paidAt ? new Date(entry.paidAt).toLocaleString() : "";
+    const items = Array.isArray(entry.items) ? entry.items : [];
+
+    const total = items.reduce((sum, p) => sum + (p.amount || 0), 0).toFixed(2);
+
+    let html = `<strong>Zahlung vom ${date} – Gesamt: ${total} €</strong><ul>`;
+    items.forEach(p => {
+      html += `<li>${p.name} – ${p.amount.toFixed(2)} €</li>`;
+    });
+    html += "</ul><hr>";
+    historyDiv.innerHTML += html;
+  });
+}).catch((error) => {
+  console.error("Fehler beim Laden der Historie:", error);
+  historyDiv.innerHTML += "<p>Fehler beim Laden der Historie.</p>";
+  });
+}
+
+
+function deletePlayerPenalty(playerId, penaltyKey) {
+  if (!confirm("Möchtest du diese Strafe wirklich löschen?")) return;
+
+  const penaltyRef = ref(db, `playerPenalties/${playerId}/${penaltyKey}`);
+  remove(penaltyRef)
+    .then(() => {
+      alert("Strafe gelöscht.");
+      updateSummary(); // 🟢 Strafenübersicht neu berechnen
+    })
+    .catch((error) => {
+      console.error("Fehler beim Löschen der Strafe:", error);
+    });
+}
+
+function prepareMarkPenaltiesAsPaid(playerId) {
+  const playerRef = ref(db, `playerPenalties/${playerId}`);
+  get(playerRef).then((snapshot) => {
+    const penalties = snapshot.val();
+    if (!penalties || Object.keys(penalties).length === 0) {
+      alert("Keine offenen Strafen zum Archivieren.");
+      return;
+    }
+
+    // In ein Array umwandeln (optional, falls du das lieber speicherst)
+    const items = Object.values(penalties);
+
+    // Aufruf der Hauptfunktion mit vollständigen Daten
+    markPenaltiesAsPaid(playerId, items);
+  }).catch((error) => {
+    console.error("Fehler beim Laden der Strafen:", error);
+  });
+}
+
+function markPenaltiesAsPaid(playerId, penalties) {
+  if (!confirm("Möchtest du alle Strafen als bezahlt markieren?")) return;
+
+  const timestamp = new Date().toISOString();
+  const archiveRef = ref(db, `paidPenalties/${playerId}/${Date.now()}`);
+  const playerPenaltyRef = ref(db, `playerPenalties/${playerId}`);
+
+  // Alle offenen Strafen in Archiv schreiben und danach löschen
+  set(archiveRef, {
+    paidAt: timestamp,
+    items: penalties
+  }).then(() => {
+    return remove(playerPenaltyRef);
+  }).then(() => {
+    alert("Strafen archiviert und auf 0 € gesetzt.");
+    updateSummary();
+    showPlayerDetails(playerId); // Ansicht neu laden
+  }).catch((error) => {
+    console.error("Fehler beim Archivieren:", error);
+  });
+}
+
+</script>
+
+ <script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
+  import { getDatabase, ref, set, get, onValue, push, remove , off } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-database.js";
+  import { firebaseConfig } from "./firebase-config.js"; // ⬅️ Hier wird die externe Datei eingebunden
+
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+  
+  const playersRef = ref(db, "players");
+  const eventRef = ref(db, "events");
+  const docsRef = ref(db, "documents");
+
+
+
+  // Globale Referenz verfügbar machen
+  window.db = db;
+  window.ref = ref;
+  window.set = set;
+  window.get = get;
+  window.onValue = onValue;
+  window.push = push;
+  window.remove = remove;
+   </script>
+
+<section id="playerDetails" style="display:none">
+  <h2>🔍 Einzelne Strafen für <span id="detailPlayerName"></span></h2>
+  <ul id="playerPenaltyDetails"></ul>
+  <div id="penaltyHistory"></div>
+  <button onclick="switchPage('home')">🔙 Zurück</button>
+</section>
+
+<footer style="text-align: center; padding: 20px;">
+  <button onclick="logout()" style="padding: 10px 20px; font-size: 16px;">🔐 Zurück zur Anmeldung</button>
+</footer>
+
+</body>
+</html>
+
