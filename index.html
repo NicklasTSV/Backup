@@ -717,15 +717,15 @@ function registerCustomPenaltyToggle() {
 
 function updateSummary() {
   const tb = document.getElementById("summaryTable");
+  if (!tb) return;
   tb.innerHTML = "";
 
-  // parallel laden: offene Strafen + Zahlungsanfragen (pending)
   Promise.all([
     get(ref(db, "playerPenalties")),
-    get(ref(db, "paymentRequests"))
-  ]).then(([penSnap, reqSnap]) => {
-    const penData = penSnap.val() || {};
-    const reqData = reqSnap.val() || {};
+    get(ref(db, "fixedPenalties"))
+  ]).then(([penSnap, fixedSnap]) => {
+    const penData   = penSnap.val()   || {};
+    const fixedData = fixedSnap.val() || {};
 
     players.forEach(player => {
       // offene Strafen live summieren
@@ -735,28 +735,16 @@ function updateSummary() {
         if (p && typeof p.amount === "number") openSum += p.amount;
       });
 
-      // „Zu bezahlen“ = Summe aller pending paymentRequests
+      // fixierter Betrag (zu bezahlen)
       let toPay = 0;
-      const reqsForPlayer = reqData[player.id] || {};
-      Object.values(reqsForPlayer).forEach(r => {
-        if (!r) return;
-        // wir zählen nur offene/fixierte, noch nicht bezahlte Anfragen:
-        const isPending = (r.status === "pending" || r.status === undefined);
-
-        if (isPending) {
-          if (typeof r.total === "number") {
-            // bevorzugt 'total' nutzen, wenn vorhanden
-            toPay += r.total;
-          } else if (Array.isArray(r.items)) {
-            // Fallback: total aus items berechnen
-            let subtotal = 0;
-            r.items.forEach(it => {
-              if (it && typeof it.amount === "number") subtotal += it.amount;
-            });
-            toPay += subtotal;
-          }
+      const fixed = fixedData[player.id];
+      if (fixed) {
+        if (typeof fixed.amount === "number") {
+          toPay = fixed.amount;
+        } else if (Array.isArray(fixed.items)) {
+          toPay = fixed.items.reduce((s, it) => s + (Number(it.amount) || 0), 0);
         }
-      });
+      }
 
       tb.innerHTML += `
         <tr>
@@ -1194,20 +1182,23 @@ function markPenaltiesAsPaid(playerId, penalties) {
   if (!confirm("Möchtest du alle Strafen als bezahlt markieren?")) return;
 
   const timestamp = new Date().toISOString();
-  const archiveRef = ref(db, `paidPenalties/${playerId}/${Date.now()}`);
-  const playerPenaltyRef = ref(db, `playerPenalties/${playerId}`);
+  const archiveRef        = ref(db, `paidPenalties/${playerId}/${Date.now()}`);
+  const playerPenaltyRef  = ref(db, `playerPenalties/${playerId}`);
+  const fixedRef          = ref(db, `fixedPenalties/${playerId}`); // 🆕 Fixierung
 
-  // Alle offenen Strafen in Archiv schreiben und danach löschen
+  // Alle offenen Strafen ins Archiv schreiben, offene Strafen löschen, Fixierung löschen
   set(archiveRef, {
     paidAt: timestamp,
     items: penalties
-  }).then(() => {
-    return remove(playerPenaltyRef);
-  }).then(() => {
-    alert("Strafen archiviert und auf 0 € gesetzt.");
+  })
+  .then(() => remove(playerPenaltyRef))   // offene Strafen leeren
+  .then(() => remove(fixedRef))           // 🆕 Fixierten Betrag entfernen
+  .then(() => {
+    alert("Strafen archiviert, fixierter Betrag entfernt und Übersicht aktualisiert.");
     updateSummary();
     showPlayerDetails(playerId); // Ansicht neu laden
-  }).catch((error) => {
+  })
+  .catch((error) => {
     console.error("Fehler beim Archivieren:", error);
   });
 }
