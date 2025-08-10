@@ -94,6 +94,11 @@
     <select id="penaltySelect"></select>
     <button onclick="addPenalty()">Strafe eintragen</button>
   </div>
+  <!-- Freitext-Strafe: zunächst versteckt -->
+<div id="customPenaltyFields" style="display:none; margin-top:8px;">
+  <input id="customPenaltyName" placeholder="Beschreibung (z. B. „Kasse vergessen“)" />
+  <input id="customPenaltyAmount" type="number" step="0.01" min="0" placeholder="Betrag in €" />
+</div>
   <table>
     <thead><tr><th>Spieler</th><th>Summe (€)</th></tr></thead>
     <tbody id="summaryTable"></tbody>
@@ -402,6 +407,7 @@ function setupApp() {
   updateSummary();
   updatePlayerSelect();       // neu
   updatePenaltySelect();      // neu
+  registerCustomPenaltyToggle();
   loadPenaltyCatalog();
   loadPlayerPenalties();
   loadEventsFromFirebase();
@@ -510,40 +516,91 @@ function updateSelects() {
 
   if (!ps || !pe || !players || !penalties) return;
 
+  // Spielerliste aufbauen
   ps.innerHTML = "";
   players.forEach(player => {
     ps.innerHTML += `<option value="${player.id}">${player.name}</option>`;
   });
 
+  // Strafenliste aufbauen
   pe.innerHTML = "";
+
+  // 🆕 Freitext-Strafe Option zuerst
+  pe.innerHTML += `<option value="">– Strafe wählen –</option>`;
+  pe.innerHTML += `<option value="custom">📝 Freitext-Strafe …</option>`;
+
+  // Danach alle bestehenden Strafen
   penalties.forEach((penalty, i) => {
     pe.innerHTML += `<option value="${i}">${penalty.name} (${penalty.amount} €)</option>`;
   });
 }
 
 function addPenalty() {
+  // Rollen-Check
   if (userRole !== "editor" && userRole !== "admin") {
     alert("Du hast keine Berechtigung, Strafen hinzuzufügen.");
     return;
   }
 
-  const player = document.getElementById("playerSelect").value;
-  const penaltyIndex = parseInt(document.getElementById("penaltySelect").value);
-  const penalty = penalties[penaltyIndex];
+  const playerId = document.getElementById("playerSelect").value;
+  const selected = document.getElementById("penaltySelect").value;
+  if (!playerId || !selected) return;
 
-  if (!player || !penalty) return;
+  let penaltyName, amount;
 
-  const penaltyRef = push(ref(db, `playerPenalties/${player}`));
-  set(penaltyRef, {
-    name: penalty.name,
-    amount: penalty.amount,
-    timestamp: new Date().toISOString(),
-    paid: false // 🟢 NEU
-  }).then(() => {
-    updateSummary();
-  }).catch((error) => {
-    console.error("Fehler beim Hinzufügen der Strafe:", error);
-  });
+  if (selected === "custom") {
+    // ⚠️ Freitext aus Formfeldern lesen (statt prompt)
+    const nameEl = document.getElementById("customPenaltyName");
+    const amtEl  = document.getElementById("customPenaltyAmount");
+
+    const name = (nameEl?.value || "").trim();
+    const amtStr = String(amtEl?.value || "").replace(",", ".");
+    const parsed = parseFloat(amtStr);
+
+    if (!name || isNaN(parsed) || parsed <= 0) {
+      alert("Bitte Freitext und einen gültigen Betrag eingeben.");
+      return;
+    }
+
+    penaltyName = name;
+    amount = Math.round(parsed * 100) / 100; // 2 Nachkommastellen
+  } else {
+    // Katalog-Strafe
+    const idx = parseInt(selected, 10);
+    const p = penalties[idx];
+    if (!p) return;
+
+    penaltyName = p.name;
+    amount = Number(p.amount) || 0;
+  }
+
+  const entry = {
+    name: penaltyName,
+    amount: amount,
+    timestamp: new Date().toISOString()
+  };
+
+  const penaltyRef = push(ref(db, `playerPenalties/${playerId}`));
+  set(penaltyRef, entry)
+    .then(() => {
+      // UI zurücksetzen
+      const pe = document.getElementById("penaltySelect");
+      pe.value = ""; // Auswahl leeren
+
+      // Freitext-Felder leeren & ausblenden
+      const nameEl = document.getElementById("customPenaltyName");
+      const amtEl  = document.getElementById("customPenaltyAmount");
+      if (nameEl) nameEl.value = "";
+      if (amtEl)  amtEl.value  = "";
+      const box = document.getElementById("customPenaltyFields");
+      if (box) box.style.display = "none";
+
+      updateSummary();
+    })
+    .catch((err) => {
+      console.error("Fehler beim Hinzufügen der Strafe:", err);
+      alert("Fehler beim Hinzufügen der Strafe.");
+    });
 }
 
 function updatePlayerSelect() {
@@ -564,6 +621,22 @@ function updatePenaltySelect() {
   Object.entries(penalties).forEach(([key, pen]) => {
     pe.innerHTML += `<option value="${key}">${pen.name} (${pen.amount} €)</option>`;
   });
+}
+
+function registerCustomPenaltyToggle() {
+  const pe = document.getElementById("penaltySelect");
+  const box = document.getElementById("customPenaltyFields");
+  if (!pe || !box) return;
+
+  const toggle = () => {
+    box.style.display = (pe.value === "custom") ? "block" : "none";
+  };
+
+  // Handler setzen (überschreibt ggf. einen alten, verhindert doppelte Listener)
+  pe.onchange = toggle;
+
+  // Beim ersten Laden gleich korrekt setzen
+  toggle();
 }
 
 function updateSummary() {
