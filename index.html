@@ -99,10 +99,16 @@
   <input id="customPenaltyName" placeholder="Beschreibung (z. B. „Kasse vergessen“)" />
   <input id="customPenaltyAmount" type="number" step="0.01" min="0" placeholder="Betrag in €" />
 </div>
-  <table>
-    <thead><tr><th>Spieler</th><th>Summe (€)</th></tr></thead>
-    <tbody id="summaryTable"></tbody>
-  </table>
+<table>
+  <thead>
+    <tr>
+      <th>Spieler</th>
+      <th>Summe (€)</th>
+      <th>Zu bezahlen (€)</th> <!-- neu -->
+    </tr>
+  </thead>
+  <tbody id="summaryTable"></tbody>
+</table>
 </section>
 
 <section id="catalog">
@@ -623,6 +629,76 @@ function updatePenaltySelect() {
   });
 }
 
+// Erzeugt eine "fixierte" Zahlungsanfrage aus den aktuell offenen Strafen
+function createPaymentRequest(playerId) {
+  const listRef = ref(db, `playerPenalties/${playerId}`);
+  get(listRef).then(snap => {
+    const all = snap.val() || {};
+    const entries = Object.entries(all);
+    if (entries.length === 0) {
+      alert("Keine offenen Strafen zum Fixieren.");
+      return;
+    }
+
+    const keys = entries.map(([k]) => k);
+    const total = entries.reduce((sum, [,p]) => sum + (Number(p.amount)||0), 0);
+    const reqId = Date.now();
+
+    const reqRef = ref(db, `paymentRequests/${playerId}/${reqId}`);
+    return set(reqRef, {
+      createdAt: new Date(reqId).toISOString(),
+      keys,
+      total: Math.round(total*100)/100,
+      status: "pending"
+    });
+  }).then(() => {
+    alert("Zahlungsstand fixiert.");
+    showPlayerDetails(playerId);
+  }).catch(err => {
+    console.error("PaymentRequest Fehler:", err);
+    alert("Fehler beim Fixieren.");
+  });
+}
+
+function markPaymentRequestAsPaid(playerId, requestId) {
+  const reqRef = ref(db, `paymentRequests/${playerId}/${requestId}`);
+  get(reqRef).then(snap => {
+    const req = snap.val();
+    if (!req || !Array.isArray(req.keys) || req.keys.length === 0) {
+      alert("Anfrage nicht gefunden oder leer.");
+      return;
+    }
+
+    // Aktuelle Strafdaten holen, um die Objekte zu archivieren
+    const listRef = ref(db, `playerPenalties/${playerId}`);
+    return get(listRef).then(listSnap => {
+      const all = listSnap.val() || {};
+      const items = req.keys.map(k => all[k]).filter(Boolean);
+
+      const archiveRef = ref(db, `paidPenalties/${playerId}/${Date.now()}`);
+      return set(archiveRef, {
+        paidAt: new Date().toISOString(),
+        items
+      }).then(() => {
+        // Nur die in der Anfrage enthaltenen Keys löschen
+        const updates = {};
+        req.keys.forEach(k => updates[k] = null);
+        return update(listRef, updates);
+      }).then(() => {
+        // Anfrage auf "paid" setzen
+        return update(reqRef, { status: "paid" });
+      });
+    });
+  }).then(() => {
+    alert("Fixierter Betrag bezahlt & archiviert.");
+    updateSummary();
+    showPlayerDetails(playerId);
+  }).catch(err => {
+    console.error("markPaymentRequestAsPaid Fehler:", err);
+    alert("Fehler beim Bezahlen.");
+  });
+}
+
 function registerCustomPenaltyToggle() {
   const pe = document.getElementById("penaltySelect");
   const box = document.getElementById("customPenaltyFields");
@@ -643,27 +719,54 @@ function updateSummary() {
   const tb = document.getElementById("summaryTable");
   tb.innerHTML = "";
 
-  get(ref(db, "playerPenalties")).then((snapshot) => {
-    const data = snapshot.val() || {};
+  // parallel laden: offene Strafen + Zahlungsanfragen (pending)
+  Promise.all([
+    get(ref(db, "playerPenalties")),
+    get(ref(db, "paymentRequests"))
+  ]).then(([penSnap, reqSnap]) => {
+    const penData = penSnap.val() || {};
+    const reqData = reqSnap.val() || {};
 
     players.forEach(player => {
-      const playerData = data[player.id];
-      let sum = 0;
+      // offene Strafen live summieren
+      const playerPen = penData[player.id] || {};
+      let openSum = 0;
+      Object.values(playerPen).forEach(p => {
+        if (p && typeof p.amount === "number") openSum += p.amount;
+      });
 
-      if (playerData) {
-        Object.values(playerData).forEach(p => {
-          if (!p.paid && typeof p.amount === "number") {  // 🟢 Nur unbezahlte
-            sum += p.amount;
+      // „Zu bezahlen“ = Summe aller pending paymentRequests
+      let toPay = 0;
+      const reqsForPlayer = reqData[player.id] || {};
+      Object.values(reqsForPlayer).forEach(r => {
+        if (!r) return;
+        // wir zählen nur offene/fixierte, noch nicht bezahlte Anfragen:
+        const isPending = (r.status === "pending" || r.status === undefined);
+
+        if (isPending) {
+          if (typeof r.total === "number") {
+            // bevorzugt 'total' nutzen, wenn vorhanden
+            toPay += r.total;
+          } else if (Array.isArray(r.items)) {
+            // Fallback: total aus items berechnen
+            let subtotal = 0;
+            r.items.forEach(it => {
+              if (it && typeof it.amount === "number") subtotal += it.amount;
+            });
+            toPay += subtotal;
           }
-        });
-      }
+        }
+      });
 
       tb.innerHTML += `
         <tr>
           <td class="clickable" onclick="showPlayerDetails('${player.id}')">${player.name}</td>
-          <td>${sum.toFixed(2)} €</td>
+          <td>${openSum.toFixed(2)} €</td>
+          <td>${toPay.toFixed(2)} €</td>
         </tr>`;
     });
+  }).catch(err => {
+    console.error("updateSummary() Fehler:", err);
   });
 }
 
@@ -958,62 +1061,101 @@ function showPlayerDetails(playerId) {
     const data = snapshot.val();
     if (!data) {
       ul.innerHTML = "<li>Keine Strafen gefunden</li>";
-      return;
+    } else {
+      Object.entries(data).forEach(([key, p]) => {
+        const date = p.timestamp ? new Date(p.timestamp).toLocaleString() : "";
+        const deleteBtn = (userRole === "admin" || userRole === "editor")
+          ? ` <button onclick="deletePlayerPenalty('${playerId}', '${key}')">🗑️</button>`
+          : "";
+
+        ul.innerHTML += `<li>${p.name} – ${Number(p.amount).toFixed(2)} € – ${date}${deleteBtn}</li>`;
+      });
+
+      if ((userRole === "admin" || userRole === "editor") && Object.keys(data).length > 0) {
+        ul.innerHTML += `
+          <div style="margin-top: 10px;">
+            <button onclick="prepareMarkPenaltiesAsPaid('${playerId}')" style="background-color: green; color: white; padding: 8px 12px; border: none; border-radius: 6px; font-size: 16px;">
+              💰 Strafen bezahlt
+            </button>
+          </div>
+        `;
+      }
     }
 
-    Object.entries(data).forEach(([key, p]) => {
-      const date = p.timestamp ? new Date(p.timestamp).toLocaleString() : "";
-      const deleteBtn = (userRole === "admin" || userRole === "editor")
-        ? ` <button onclick="deletePlayerPenalty('${playerId}', '${key}')">🗑️</button>`
-        : "";
+    // 🆕 FIXIERUNG PRÜFEN & ANZEIGEN (nachdem wir wissen, ob es offene Strafen gibt)
+    const fixedDiv = document.getElementById("playerFixedAmount");
+    const hasOpen = !!data && Object.keys(data).length > 0;
 
-      ul.innerHTML += `<li>${p.name} – ${p.amount.toFixed(2)} € – ${date}${deleteBtn}</li>`;
+    get(ref(db, `fixedPenalties/${playerId}`)).then((fixSnap) => {
+      const fix = fixSnap.val();
+
+      if (fix && typeof fix.amount === "number") {
+        const amt = Number(fix.amount) || 0;
+        const when = fix.fixedAt ? new Date(fix.fixedAt).toLocaleString() : "";
+        fixedDiv.style.display = "block";
+        fixedDiv.innerHTML = `
+          <div style="display:flex; gap:8px; align-items:center; justify-content:space-between;">
+            <div>💵 <strong>Zu bezahlen (fixiert):</strong> ${amt.toFixed(2)} € <span style="opacity:.7">(${when})</span></div>
+            ${(userRole === "admin" || userRole === "editor") ? `
+              <div style="display:flex; gap:6px">
+                <button onclick="fixCurrentPenalties('${playerId}')" style="background:#3498db; color:#fff; padding:8px 12px; border:none; border-radius:6px;">Aktualisieren</button>
+                <button onclick="clearFixedAmount('${playerId}')" style="background:#e74c3c; color:#fff; padding:8px 12px; border:none; border-radius:6px;">Fixierung entfernen</button>
+              </div>` : ``}
+          </div>
+        `;
+      } else {
+        if ((userRole === "admin" || userRole === "editor") && hasOpen) {
+          fixedDiv.style.display = "block";
+          fixedDiv.innerHTML = `
+            <div style="display:flex; gap:8px; align-items:center; justify-content:space-between;">
+              <div>💵 <strong>Zu bezahlen (fixiert):</strong> –</div>
+              <button onclick="fixCurrentPenalties('${playerId}')" style="background:#2ecc71; color:#fff; padding:8px 12px; border:none; border-radius:6px;">Betrag fixieren</button>
+            </div>
+          `;
+        } else {
+          fixedDiv.style.display = "none";
+          fixedDiv.innerHTML = "";
+        }
+      }
+    }).catch(err => {
+      console.error("Fixierung laden:", err);
+      if (fixedDiv) { fixedDiv.style.display = "none"; fixedDiv.innerHTML = ""; }
     });
-  if ((userRole === "admin" || userRole === "editor") && Object.keys(data).length > 0) {
-  ul.innerHTML += `
-   <div style="margin-top: 10px;">
-  <button onclick="prepareMarkPenaltiesAsPaid('${playerId}')" style="background-color: green; color: white; padding: 8px 12px; border: none; border-radius: 6px; font-size: 16px;">
-    💰 Strafen bezahlt
-  </button>
-</div>
-  `;
-}
+
   }).catch((error) => {
     console.error("Fehler beim Laden der Strafen:", error);
     ul.innerHTML = "<li>Fehler beim Laden der Strafen</li>";
   });
 
-// ⬛ ARCHIVIERTE STRAFEN LADEN
-const historyDiv = document.getElementById("penaltyHistory");
-historyDiv.innerHTML = "<h4>📜 Historie</h4>";
+  // ⬛ ARCHIVIERTE STRAFEN LADEN
+  const historyDiv = document.getElementById("penaltyHistory");
+  historyDiv.innerHTML = "<h4>📜 Historie</h4>";
 
-const archiveRef = ref(db, `paidPenalties/${playerId}`);
-get(archiveRef).then((snapshot) => {
-  const data = snapshot.val();
-  if (!data) {
-    historyDiv.innerHTML += "<p>Keine Zahlungen gefunden.</p>";
-    return;
-  }
+  const archiveRef = ref(db, `paidPenalties/${playerId}`);
+  get(archiveRef).then((snapshot) => {
+    const data = snapshot.val();
+    if (!data) {
+      historyDiv.innerHTML += "<p>Keine Zahlungen gefunden.</p>";
+      return;
+    }
 
-  Object.entries(data).forEach(([key, entry]) => {
-    const date = entry.paidAt ? new Date(entry.paidAt).toLocaleString() : "";
-    const items = Array.isArray(entry.items) ? entry.items : [];
+    Object.entries(data).forEach(([key, entry]) => {
+      const date = entry.paidAt ? new Date(entry.paidAt).toLocaleString() : "";
+      const items = Array.isArray(entry.items) ? entry.items : [];
+      const total = items.reduce((sum, p) => sum + (p.amount || 0), 0).toFixed(2);
 
-    const total = items.reduce((sum, p) => sum + (p.amount || 0), 0).toFixed(2);
-
-    let html = `<strong>Zahlung vom ${date} – Gesamt: ${total} €</strong><ul>`;
-    items.forEach(p => {
-      html += `<li>${p.name} – ${p.amount.toFixed(2)} €</li>`;
+      let html = `<strong>Zahlung vom ${date} – Gesamt: ${total} €</strong><ul>`;
+      items.forEach(p => {
+        html += `<li>${p.name} – ${Number(p.amount).toFixed(2)} €</li>`;
+      });
+      html += "</ul><hr>";
+      historyDiv.innerHTML += html;
     });
-    html += "</ul><hr>";
-    historyDiv.innerHTML += html;
-  });
-}).catch((error) => {
-  console.error("Fehler beim Laden der Historie:", error);
-  historyDiv.innerHTML += "<p>Fehler beim Laden der Historie.</p>";
+  }).catch((error) => {
+    console.error("Fehler beim Laden der Historie:", error);
+    historyDiv.innerHTML += "<p>Fehler beim Laden der Historie.</p>";
   });
 }
-
 
 function deletePlayerPenalty(playerId, penaltyKey) {
   if (!confirm("Möchtest du diese Strafe wirklich löschen?")) return;
@@ -1070,11 +1212,57 @@ function markPenaltiesAsPaid(playerId, penalties) {
   });
 }
 
+// Betrag aus aktuellen, offenen Strafen "fixieren" (einfrieren)
+function fixCurrentPenalties(playerId) {
+  const playerPenaltyRef = ref(db, `playerPenalties/${playerId}`);
+
+  get(playerPenaltyRef).then((snap) => {
+    const itemsObj = snap.val();
+    const items = itemsObj ? Object.values(itemsObj) : [];
+
+    if (items.length === 0) {
+      alert("Es gibt aktuell keine offenen Strafen zum Fixieren.");
+      return;
+    }
+
+    const amount = items.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const fixedRef = ref(db, `fixedPenalties/${playerId}`);
+
+    // optional: Items mit ablegen, damit der Fixierungsstand nachvollziehbar ist
+    return set(fixedRef, {
+      amount: Math.round(amount * 100) / 100,
+      fixedAt: new Date().toISOString(),
+      items
+    });
+  }).then(() => {
+    alert("Betrag fixiert.");
+    updateSummary();         // Tabelle neu berechnen/anzeigen
+    showPlayerDetails(playerId); // Detailansicht auffrischen
+  }).catch((err) => {
+    console.error("Fehler beim Fixieren:", err);
+    alert("Fehler beim Fixieren.");
+  });
+}
+
+// Fixierung wieder entfernen
+function clearFixedAmount(playerId) {
+  if (!confirm("Fixierten Betrag wirklich entfernen?")) return;
+
+  const fixedRef = ref(db, `fixedPenalties/${playerId}`);
+  remove(fixedRef).then(() => {
+    updateSummary();
+    showPlayerDetails(playerId);
+  }).catch((err) => {
+    console.error("Fehler beim Entfernen der Fixierung:", err);
+    alert("Fehler beim Entfernen der Fixierung.");
+  });
+}
+
 </script>
 
  <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
-  import { getDatabase, ref, set, get, onValue, push, remove , off } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-database.js";
+  import { getDatabase, ref, set, get, onValue, push, remove , off , update } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-database.js";
   import { firebaseConfig } from "./firebase-config.js"; // ⬅️ Hier wird die externe Datei eingebunden
 
   const app = initializeApp(firebaseConfig);
@@ -1098,6 +1286,10 @@ function markPenaltiesAsPaid(playerId, penalties) {
 
 <section id="playerDetails" style="display:none">
   <h2>🔍 Einzelne Strafen für <span id="detailPlayerName"></span></h2>
+
+  <!-- 🆕 Platzhalter für fixierte Summe -->
+  <div id="playerFixedAmount" style="font-weight: bold; color: darkred; display:none;"></div>
+
   <ul id="playerPenaltyDetails"></ul>
   <div id="penaltyHistory"></div>
   <button onclick="switchPage('home')">🔙 Zurück</button>
