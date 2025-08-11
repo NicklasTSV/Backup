@@ -553,6 +553,7 @@ function addPenalty() {
   if (!playerId || !selected) return;
 
   let penaltyName, amount;
+  let entryMeta; // 🔸 optional: Zusatzinfos für Historie
 
   if (selected === "custom") {
     // ⚠️ Freitext aus Formfeldern lesen (statt prompt)
@@ -576,14 +577,39 @@ function addPenalty() {
     const p = penalties[idx];
     if (!p) return;
 
+    // Standard: fixer Betrag
     penaltyName = p.name;
     amount = Number(p.amount) || 0;
+
+    // 🔸 Minimal‑Patch: Erkenne „pro 5 Min“/„je 5 Min“ usw. und berechne dynamisch
+    const nameLower = String(p.name).toLowerCase();
+    const isPer5Min = /(pro|je)\s*5\s*min/.test(nameLower);
+    if (isPer5Min) {
+      const minutesInput = prompt("Wie viele Minuten zu spät?");
+      if (minutesInput === null) return; // abgebrochen
+
+      const minutes = parseInt(String(minutesInput).replace(",", "."), 10);
+      if (isNaN(minutes) || minutes < 0) {
+        alert("Ungültige Minutenangabe.");
+        return;
+      }
+
+      const step = 5;                      // 5‑Minuten‑Schritte
+      const units = Math.ceil(minutes / step);
+      const rate = Number(p.amount) || 0;  // Betrag pro 5 Minuten (aus Katalog)
+      amount = units * rate;
+
+      // Namen kenntlich machen + optionale Metadaten
+      penaltyName = `${p.name} (${minutes} Min)`;
+      entryMeta = { minutes, step, units, rate, calc: "ceil(minutes/step)*rate" };
+    }
   }
 
   const entry = {
     name: penaltyName,
     amount: amount,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    ...(entryMeta ? { meta: entryMeta } : {}) // 🔸 nur wenn gesetzt
   };
 
   const penaltyRef = push(ref(db, `playerPenalties/${playerId}`));
