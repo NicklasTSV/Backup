@@ -79,6 +79,7 @@
   <button onclick="switchPage('schedule')">Termine</button>
   <button onclick="switchPage('docs')">Dokumente</button>
   <button id="navTraining" onclick="switchPage('trainingSection')" style="display: none;">📅 Training</button>
+  <button id="navFund" onclick="switchPage('fundSection')" style="display:none">💰 Mannschaftskasse</button>
 </nav>
 
 <section id="login">
@@ -176,6 +177,36 @@
   <div id="trainingStats"></div>
 
   <button onclick="switchPage('home')">🔙 Zurück</button>
+</section>
+
+<!-- 🆕 Mannschaftskasse (nur Admin) -->
+<section id="fundSection" style="display:none; max-width:800px; margin:auto; padding:20px;">
+  <h2>💼 Mannschaftskasse</h2>
+
+  <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin:12px 0;">
+    <label>Periode:
+      <select id="fundPeriod"></select>
+    </label>
+    <label>Betrag pro Spieler:
+      <input id="fundAmount" type="number" step="0.01" min="0" style="width:120px" />
+    </label>
+    <button id="fundSaveAmountBtn">Betrag speichern</button>
+  </div>
+
+  <table style="width:100%; border-collapse:collapse;">
+    <thead>
+      <tr>
+        <th style="text-align:left; padding:8px;">Spieler</th>
+        <th style="text-align:center; padding:8px;">Bezahlt?</th>
+        <th style="text-align:left; padding:8px;">Bezahlt am</th>
+      </tr>
+    </thead>
+    <tbody id="fundTableBody"></tbody>
+  </table>
+
+  <div style="margin-top:12px;">
+    <button onclick="switchPage('home')">🔙 Zurück</button>
+  </div>
 </section>
 
 <script>
@@ -370,6 +401,11 @@ function switchPage(id) {
       calculateAttendanceStats();
     }
   }
+if (id === "fundSection") {
+  // Seite nur sinnvoll, wenn Admin – der Button ist ohnehin nur für Admin sichtbar
+  buildFundPeriodOptions(); // falls noch nicht da
+  loadTeamFund();
+}
 }
   
 function checkPIN() {
@@ -434,6 +470,27 @@ function setupApp() {
     loadTrainings();
     calculateAttendanceStats();
   }
+  // 🆕 Mannschaftskasse vorbereiten (nur Admin sieht den Menüpunkt)
+const navFund = document.getElementById("navFund");
+if (navFund) {
+  navFund.style.display = (userRole === "admin") ? "inline-block" : "none";
+}
+
+// Events für Periode/Betrag nur einmal hängen
+const fundPeriodEl = document.getElementById("fundPeriod");
+const fundSaveBtn  = document.getElementById("fundSaveAmountBtn");
+
+if (fundPeriodEl && !fundPeriodEl._bound) {
+  fundPeriodEl.addEventListener("change", loadTeamFund);
+  fundPeriodEl._bound = true;
+}
+if (fundSaveBtn && !fundSaveBtn._bound) {
+  fundSaveBtn.addEventListener("click", saveFundAmount);
+  fundSaveBtn._bound = true;
+}
+
+// Periode-Dropdown einmalig füllen
+buildFundPeriodOptions();
 }
   
 function calculateAttendanceStats() {
@@ -1273,6 +1330,117 @@ function clearFixedAmount(playerId) {
     console.error("Fehler beim Entfernen der Fixierung:", err);
     alert("Fehler beim Entfernen der Fixierung.");
   });
+}
+
+// 🧮 Periode berechnen: "YYYY-H1" (Jan–Jun) / "YYYY-H2" (Jul–Dez)
+function getCurrentFundPeriod(d = new Date()) {
+  const year = d.getFullYear();
+  const half = (d.getMonth() < 6) ? "H1" : "H2";
+  return `${year}-${half}`;
+}
+
+// Periode Dropdown befüllen (aktuelle + Nachbarperioden)
+function buildFundPeriodOptions() {
+  const sel = document.getElementById("fundPeriod");
+  if (!sel) return;
+  sel.innerHTML = "";
+
+  const now = new Date();
+  const periods = [];
+
+  // Vorperiode
+  const prev = new Date(now);
+  prev.setMonth(now.getMonth() - 6);
+  periods.push(getCurrentFundPeriod(prev));
+
+  // aktuelle
+  const cur = getCurrentFundPeriod(now);
+  periods.push(cur);
+
+  // Folgeperiode
+  const next = new Date(now);
+  next.setMonth(now.getMonth() + 6);
+  periods.push(getCurrentFundPeriod(next));
+
+  // Duplikate raus (bei Jahreswechsel selten)
+  const uniq = [...new Set(periods)];
+
+  uniq.forEach(p => {
+    const opt = document.createElement("option");
+    opt.value = p;
+    opt.textContent = p;
+    if (p === cur) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+// Daten laden + Tabelle rendern
+function loadTeamFund() {
+  const period = document.getElementById("fundPeriod")?.value;
+  if (!period) return;
+
+  // Betrag holen
+  get(ref(db, `teamFundMeta/${period}`)).then(metaSnap => {
+    const meta = metaSnap.val() || {};
+    const amountEl = document.getElementById("fundAmount");
+    if (amountEl) amountEl.value = (typeof meta.amount === "number" ? meta.amount : 50).toFixed(2);
+  });
+
+  // Zahlungsliste holen
+  const tbody = document.getElementById("fundTableBody");
+  if (tbody) tbody.innerHTML = "";
+
+  get(ref(db, `teamFund/${period}`)).then(snap => {
+    const fundData = snap.val() || {};
+    // alle Spieler zeigen
+    players.forEach(pl => {
+      const row = document.createElement("tr");
+      row.innerHTML = `
+        <td style="padding:6px; border-top:1px solid #ddd;">${pl.name}</td>
+        <td style="padding:6px; border-top:1px solid #ddd; text-align:center;">
+          <input type="checkbox" ${fundData[pl.id]?.paid ? "checked" : ""} 
+                 onchange="toggleFundPaid('${pl.id}', this.checked)">
+        </td>
+        <td style="padding:6px; border-top:1px solid #ddd;">
+          ${fundData[pl.id]?.paidAt ? new Date(fundData[pl.id].paidAt).toLocaleDateString() : "—"}
+        </td>
+      `;
+      tbody.appendChild(row);
+    });
+  });
+}
+
+// Checkbox‑Handler: bezahlt an/aus
+function toggleFundPaid(playerId, isPaid) {
+  const period = document.getElementById("fundPeriod")?.value;
+  if (!period) return;
+
+  const nodeRef = ref(db, `teamFund/${period}/${playerId}`);
+  if (isPaid) {
+    set(nodeRef, { paid: true, paidAt: new Date().toISOString() })
+      .catch(err => console.error("toggleFundPaid set:", err));
+  } else {
+    // Reset
+    set(nodeRef, { paid: false }).catch(err => console.error("toggleFundPaid unset:", err));
+  }
+}
+
+// Betrag speichern
+function saveFundAmount() {
+  const period = document.getElementById("fundPeriod")?.value;
+  const amountEl = document.getElementById("fundAmount");
+  if (!period || !amountEl) return;
+
+  const raw = String(amountEl.value || "").replace(",", ".");
+  const val = parseFloat(raw);
+  if (isNaN(val) || val < 0) {
+    alert("Bitte einen gültigen Betrag eingeben.");
+    return;
+  }
+
+  set(ref(db, `teamFundMeta/${period}`), { amount: Math.round(val * 100) / 100 })
+    .then(() => alert("Betrag gespeichert."))
+    .catch(err => console.error("saveFundAmount:", err));
 }
 
 </script>
