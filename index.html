@@ -183,6 +183,18 @@
 <section id="fundSection" style="display:none; max-width:800px; margin:auto; padding:20px;">
   <h2>💼 Mannschaftskasse</h2>
 
+<!-- 🧭 Perioden-Manager (nur Admin) -->
+<div id="fundPeriodManager" style="margin:12px 0; padding:10px; border:1px solid #ddd; border-radius:8px;">
+  <h3 style="margin:0 0 8px 0;">Perioden verwalten</h3>
+
+  <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+    <input id="newFundPeriod" placeholder="z. B. 2025-H1 oder 2025-Q1" />
+    <button id="addFundPeriodBtn">➕ Periode hinzufügen</button>
+  </div>
+
+  <ul id="fundPeriodsList" style="margin:10px 0 0 0; padding-left:18px;"></ul>
+</div>
+
   <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin:12px 0;">
     <label>Periode:
       <select id="fundPeriod"></select>
@@ -395,17 +407,23 @@ function switchPage(id) {
   if (target) {
     target.style.display = "block";
 
-    // 🔁 Trainingsdaten nur bei trainingSection laden
-    if (id === "trainingSection") {
+    // 🔹 Spezielle Seiten-Initialisierungen
+    if (id === "fundSection") {
+      if (userRole !== "admin") {
+        alert("Keine Berechtigung.");
+        return switchPage("home");
+      }
+      refreshFundPeriodsUI(); // neue Funktion lädt Dropdown, Tabelle & Betrag
+    }
+
+    if (id === "training") {
       loadTrainings();
       calculateAttendanceStats();
     }
+
+  } else {
+    console.warn("❌ Seite nicht gefunden:", id);
   }
-if (id === "fundSection") {
-  // Seite nur sinnvoll, wenn Admin – der Button ist ohnehin nur für Admin sichtbar
-  buildFundPeriodOptions(); // falls noch nicht da
-  loadTeamFund();
-}
 }
   
 function checkPIN() {
@@ -491,6 +509,10 @@ if (fundSaveBtn && !fundSaveBtn._bound) {
 
 // Periode-Dropdown einmalig füllen
 buildFundPeriodOptions();
+
+document.getElementById("addFundPeriodBtn")?.addEventListener("click", addFundPeriod);
+document.getElementById("fundPeriod")?.addEventListener("change", loadTeamFund);
+document.getElementById("saveFundAmountBtn")?.addEventListener("click", saveFundAmount);
 }
   
 function calculateAttendanceStats() {
@@ -1441,6 +1463,101 @@ function saveFundAmount() {
   set(ref(db, `teamFundMeta/${period}`), { amount: Math.round(val * 100) / 100 })
     .then(() => alert("Betrag gespeichert."))
     .catch(err => console.error("saveFundAmount:", err));
+}
+
+// 🔎 Alle Perioden laden (als Array)
+function loadFundPeriods() {
+  return get(ref(db, "teamFundPeriods"))
+    .then(snap => {
+      const obj = snap.val() || {};
+      // Keys alphabetisch (damit 2025-H1, 2025-H2, 2026-H1 …)
+      return Object.keys(obj).sort();
+    });
+}
+
+// ⬇️ Dropdown aus Periodenliste bauen
+function buildFundPeriodOptionsFromList(periods) {
+  const sel = document.getElementById("fundPeriod");
+  if (!sel) return;
+  sel.innerHTML = "";
+
+  if (!periods || periods.length === 0) {
+    // Falls noch keine Periode existiert, Hinweis und fertig
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "— keine Periode angelegt —";
+    sel.appendChild(opt);
+    return;
+  }
+
+  periods.forEach(p => {
+    const opt = document.createElement("option");
+    opt.value = p;
+    opt.textContent = p;
+    sel.appendChild(opt);
+  });
+
+  // Standard: letzte (neueste) Periode auswählen
+  sel.value = periods[periods.length - 1];
+}
+
+// ➕ Periode hinzufügen
+function addFundPeriod() {
+  const inp = document.getElementById("newFundPeriod");
+  if (!inp) return;
+  const raw = (inp.value || "").trim();
+
+  if (!raw) {
+    alert("Bitte eine Periode angeben (z. B. 2025-H1 oder 2025-Q1).");
+    return;
+  }
+
+  // Optional: einfache Validierung
+  // if (!/^\d{4}-(H1|H2|Q[1-4])$/.test(raw)) {
+  //   alert("Ungültiges Format. Beispiel: 2025-H1, 2025-Q2.");
+  //   return;
+  // }
+
+  set(ref(db, `teamFundPeriods/${raw}`), true)
+    .then(() => {
+      inp.value = "";
+      // Liste neu laden + UI aktualisieren
+      refreshFundPeriodsUI();
+    })
+    .catch(err => console.error("addFundPeriod:", err));
+}
+
+// 🗑️ Periode löschen (nur wenn du möchtest)
+function deleteFundPeriod(key) {
+  if (!confirm(`Periode "${key}" wirklich löschen? (Zahlungsdaten bleiben bestehen)`)) return;
+
+  remove(ref(db, `teamFundPeriods/${key}`))
+    .then(() => refreshFundPeriodsUI())
+    .catch(err => console.error("deleteFundPeriod:", err));
+}
+
+// 🔁 Periodenliste + Dropdown + Tabelle aktualisieren
+function refreshFundPeriodsUI() {
+  loadFundPeriods().then(periods => {
+    // Liste rendern
+    const list = document.getElementById("fundPeriodsList");
+    if (list) {
+      list.innerHTML = "";
+      periods.forEach(p => {
+        const li = document.createElement("li");
+        li.innerHTML = `
+          <span>${p}</span>
+          <button style="margin-left:8px" onclick="deleteFundPeriod('${p}')">🗑️</button>
+        `;
+        list.appendChild(li);
+      });
+    }
+
+    // Dropdown neu bauen
+    buildFundPeriodOptionsFromList(periods);
+    // Tabelle + Betrag zur ausgewählten Periode laden
+    loadTeamFund();
+  });
 }
 
 </script>
